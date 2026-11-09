@@ -1,0 +1,3 @@
+- insert:
+    - id: tool-request-approval
+      name: '@agheieff/dsh-tool-approval'

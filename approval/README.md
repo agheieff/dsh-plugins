@@ -35,7 +35,10 @@ Known quirk: the card sends through the message box, so a half-typed draft there
 ## Use
 
 ```sh
-pnpm install && pnpm build && pnpm test
-dsh plugin --profile web add /home/agheieff/Arcadia/dsh-approval
-# add "@agheieff/dsh-tool-approval" to the profile's dsh.profile.bundles, then restart dsh web
+pnpm install && pnpm test
+pnpm release   # test, build, pack, install the packed copy into the web profile with the pinned dsh, restart dsh-web
 ```
+
+The PC's `dsh-web` service runs a pinned dsh (`~/.local/bin/dsh-pinned` → `~/.local/share/dsh/0.2.1-rc.2`), so
+upgrading the global `dsh` changes nothing there; the web profile holds the packed copy
+(`~/.local/share/dsh/plugins/*.tgz`), so work in this folder changes nothing until the next release.

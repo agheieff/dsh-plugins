@@ -31,7 +31,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.host.json && node scripts/build-client.mjs",
     "test": "vitest run",
-    "check": "tsc -p tsconfig.json --noEmit && biome check src client-src test scripts"
+    "check": "tsc -p tsconfig.json --noEmit && biome check src client-src test scripts",
+    "release": "sh scripts/release.sh"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.5",

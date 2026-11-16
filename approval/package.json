@@ -2,6 +2,12 @@
   "name": "@agheieff/dsh-tool-approval",
   "description": "request_approval: models ask the user to approve, change or reject an action; a card in the chat",
   "version": "0.2.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/agheieff/dsh-plugins.git",
+    "directory": "approval"
+  },
   "private": true,
   "type": "module",
   "main": "lib/index.js",

@@ -1,17 +1,20 @@
 #!/bin/sh
-# Release this plugin into the PC's dsh web profile: test, build, pack, install the packed copy with
-# the pinned dsh, restart the service. The profile runs the packed copy, never this working folder.
+# Test, build and pack this plugin, then install the packed copy into a dsh profile, so the profile
+# never runs this working folder. Settings come from the environment or ./release.env (not tracked):
+#   DSH          dsh command (default: dsh)
+#   DSH_PROFILE  profile to install into (default: web)
+#   DSH_PACKS    where packed copies are kept (default: ~/.local/share/dsh/plugins)
+#   DSH_RESTART  command run afterwards, e.g. "systemctl --user restart dsh-web" (default: none)
 set -eu
 cd "$(dirname "$0")/.."
-DSH="${DSH:-$HOME/.local/bin/dsh-pinned}"
-OUT="$HOME/.local/share/dsh/plugins"
+[ -f release.env ] && . ./release.env
+DSH="${DSH:-dsh}"
+OUT="${DSH_PACKS:-$HOME/.local/share/dsh/plugins}"
 pnpm test
 pnpm build
 mkdir -p "$OUT"
 NAME=$(node -p "const p=require('./package.json'); p.name.replace('@','').replace('/','-')+'-'+p.version")
 rm -f "${OUT:?}/${NAME:?}.tgz"
 pnpm pack --pack-destination "$OUT" >/dev/null
-"$DSH" plugin --profile web add "$OUT/$NAME.tgz"
-systemctl --user restart dsh-web
-sleep 8
-systemctl --user is-active dsh-web
+$DSH plugin --profile "${DSH_PROFILE:-web}" add "$OUT/$NAME.tgz"
+if [ -n "${DSH_RESTART:-}" ]; then sh -c "$DSH_RESTART"; fi

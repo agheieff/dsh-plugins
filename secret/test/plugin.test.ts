@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { Config } from '../src/index.ts'
 import { Requests } from '../src/requests.ts'
 import { answer } from '../src/route.ts'
 import { type Runner, Store, type StoreConfig, validate } from '../src/store.ts'
@@ -122,6 +123,17 @@ describe('request_secret', () => {
     await expect(h.ask('c7')).rejects.toThrow(/no destination/)
     expect(h.tool.description).toContain('- kv (when you give `kv_name`): the service secret store')
     expect(h.tool.description).toContain('- file (when you give `file`)')
+  })
+
+  it('takes a store without check or get through the config schema', async () => {
+    const { get: _, ...kv } = STORES[1] as StoreConfig
+    const cfg = Config({ stores: [kv as StoreConfig], files: true })
+    const h = harness({}, cfg.stores)
+    const result = h.ask('c8', { kv_name: 'k' })
+    await h.settle()
+    await answer(h.requests, h.store, { request: 'c8', secret: SECRET })
+    expect((await result).status).toBe('saved')
+    expect(h.remote.argvs).toEqual([['kv', 'put', 'k']])
   })
 
   it('rejects clashing field names', () => {

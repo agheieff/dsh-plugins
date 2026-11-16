@@ -52,7 +52,7 @@ export interface StoreConfig {
   /** Used on every request; otherwise only when one of its fields is given. */
   always?: boolean
   fields?: FieldConfig[]
-  /** Runs before the user is asked; a non-zero exit refuses the request with its output. */
+  /** Runs before the user is asked; a non-zero exit refuses the request with its output. Empty: none. */
   check?: string[]
   /** Stores the secret, read from stdin. */
   put: string[]
@@ -146,7 +146,7 @@ export class Store {
     if (spec.file_key && !spec.file) return 'file_key needs file'
     if (!spec.file && spec.stores.length === 0) return 'no destination: name at least one place'
     for (const s of this.chosen(spec)) {
-      if (!s.check) continue
+      if (!s.check?.length) continue
       const run = await this.run(s.check.map((a) => fill(a, spec)))
       if (run.code !== 0) return `${fill(s.label, spec)}: ${reason(run)}`
     }
@@ -167,7 +167,7 @@ export class Store {
       value,
     )
     if (put.code !== 0) return { where, ok: false, error: reason(put, value) }
-    if (!s.get) return { where, ok: true }
+    if (!s.get?.length) return { where, ok: true }
     const read = await this.run(s.get.map((a) => fill(a, spec)))
     if (read.code !== 0 || !same(read.stdout, value)) {
       return { where, ok: false, error: 'stored, but reading it back did not match' }

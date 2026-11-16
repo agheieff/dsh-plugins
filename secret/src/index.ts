@@ -1,7 +1,7 @@
 /**
  * `request_secret`: a model asks the user for a secret through a card in the chat. The card posts
  * the value to this plugin's route on dsh's own web server (same sign-in and Host/Origin fence as
- * the rest of dsh), which stores it in Proton Pass and any other named destination. The model gets
+ * the rest of dsh), which stores it in the configured places the call names. The model gets
  * the destinations, a fingerprint and the length; the value never enters the conversation or a log.
  *
  * @module @agheieff/dsh-tool-secret
@@ -16,26 +16,43 @@ import type {} from '@deepseek-ai/dsh-tools'
 import z from '@deepseek-ai/schemastery'
 import { Requests } from './requests.ts'
 import { handlers, STATE_PATH, SUBMIT_PATH } from './route.ts'
-import { Store, spawnRunner } from './store.ts'
+import { Store, type StoreConfig, spawnRunner, validate } from './store.ts'
 import { secretTool } from './tool.ts'
 
 export const name = 'tool-request-secret'
 export const inject = ['tools', 'webServer', 'connection']
 
 export interface Config {
-  /** Default Proton Pass vault. */
-  vault: string
-  /** Command prefix that runs pass-cli and pi-secrets (in the Personal container). */
-  remote: string[]
+  /** Places secrets go, as commands (see README). */
+  stores: StoreConfig[]
+  /** Offer the built-in `file` / `file_key` destination. */
+  files: boolean
   /** Where requests.jsonl is kept. */
   dir?: string
 }
 
-export const Config: z<Config> = z.object({
-  vault: z.string().default('Personal'),
-  remote: z.array(z.string()).default(['rpi']),
-  dir: z.string(),
+const Field = z.object({
+  name: z.string().required(),
+  description: z.string().required(),
+  default: z.string(),
 })
+
+const StoreSchema = z.object({
+  id: z.string().required(),
+  label: z.string().required(),
+  description: z.string().required(),
+  always: z.boolean(),
+  fields: z.array(Field),
+  check: z.array(z.string()),
+  put: z.array(z.string()).required(),
+  get: z.array(z.string()),
+})
+
+export const Config: z<Config> = z.object({
+  stores: z.array(StoreSchema).default([]),
+  files: z.boolean().default(true),
+  dir: z.string(),
+}) as z<Config>
 
 interface Connection {
   requestRejection(req: IncomingMessage): number | undefined
@@ -43,8 +60,10 @@ interface Connection {
 
 export function apply(ctx: Context, config: Config): void {
   const requests = new Requests(config.dir ?? join(homedir(), '.dsh', 'secrets'))
-  const store = new Store(spawnRunner, config.remote ?? ['rpi'])
-  ctx.tools.register(secretTool(requests, store, config.vault ?? 'Personal'))
+  const stores = config.stores ?? []
+  validate(stores)
+  const store = new Store(spawnRunner, stores, config.files ?? true)
+  ctx.tools.register(secretTool(requests, store))
   // The connection service's package is browser-side, so it is read untyped (as dsh's own
   // open-in-app plugin does).
   const connection = Reflect.get(ctx, 'connection') as Connection

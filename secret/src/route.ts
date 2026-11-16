@@ -21,6 +21,8 @@ export interface Answer {
   outcome?: Outcome
   delivered?: boolean
   error?: string
+  /** While open: where the secret will go, for the card. */
+  destinations?: string[]
 }
 
 function send(res: ServerResponse, status: number, answer: Answer): void {
@@ -118,7 +120,18 @@ export function handlers(
       const id = new URL(String(req.url), 'http://localhost').searchParams.get('request') ?? ''
       const outcome = requests.outcome(id)
       const refusal = requests.refusal(id)
-      send(res, 200, outcome ? { outcome } : refusal ? { error: refusal } : {})
+      const spec = requests.spec(id)
+      send(
+        res,
+        200,
+        outcome
+          ? { outcome }
+          : refusal
+            ? { error: refusal }
+            : spec
+              ? { destinations: store.destinations(spec) }
+              : {},
+      )
     },
   }
 }

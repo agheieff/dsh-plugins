@@ -3,7 +3,6 @@ import { type ReactNode, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { lateMessage } from '../src/render.ts'
 import type { Outcome, Spec } from '../src/spec.ts'
-import { destinations } from '../src/spec.ts'
 import { ensureStyle } from './style.ts'
 
 /** Browser-relative routes (the page may sit under a base path). */
@@ -35,6 +34,7 @@ interface Answer {
   outcome?: Outcome
   delivered?: boolean
   error?: string
+  destinations?: string[]
 }
 
 function parseArgs(raw: string | undefined): Args {
@@ -50,7 +50,8 @@ function specOf(args: Args): Spec {
   return {
     title: args.title ?? 'a secret',
     why: args.why ?? '',
-    vault: args.vault || 'Personal',
+    stores: [],
+    fields: {},
     ...args,
   }
 }
@@ -116,6 +117,7 @@ function Open(props: CardProps & { args: Args; pending: boolean }) {
     <Ask
       request={props.callId}
       spec={specOf(props.args)}
+      destinations={known.destinations ?? []}
       pending={props.pending}
       {...(props.inputActions ? { actions: props.inputActions } : {})}
       {...(props.sessionId ? { sessionId: props.sessionId } : {})}
@@ -182,6 +184,7 @@ const isUrl = (text: string): boolean => /^https?:\/\/\S+$/.test(text.trim())
 function Ask(props: {
   request: string
   spec: Spec
+  destinations: string[]
   pending: boolean
   actions?: InputActions
   sessionId?: string
@@ -261,7 +264,9 @@ function Ask(props: {
             if (e.key === 'Enter' && secret.trim() && !busy) void post(false)
           }}
         />
-        <div className="dsh-sec-quiet">Saved to {destinations(spec).join(' · ')}</div>
+        {props.destinations.length > 0 && (
+          <div className="dsh-sec-quiet">Saved to {props.destinations.join(' · ')}</div>
+        )}
       </div>
       <div className="dsh-sec-foot">
         <span className="dsh-sec-note">

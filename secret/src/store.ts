@@ -31,95 +31,146 @@ export const spawnRunner: Runner = (argv, stdin) =>
     child.stdin.end(stdin ?? '')
   })
 
+/** A tool parameter a store adds; `{name}` in its commands and label. */
+export interface FieldConfig {
+  name: string
+  description: string
+  default?: string
+}
+
+/**
+ * A place secrets go, as commands. Each argv element may contain `{title}` and `{<field>}`
+ * placeholders (an unset field is empty); they are substituted into the element, never through a
+ * shell. The secret only travels on `put`'s stdin.
+ */
+export interface StoreConfig {
+  id: string
+  /** What the user and the model see, e.g. `Vault: {vault} / {title}`. */
+  label: string
+  /** For the model: what this place is and when to use it. */
+  description: string
+  /** Used on every request; otherwise only when one of its fields is given. */
+  always?: boolean
+  fields?: FieldConfig[]
+  /** Runs before the user is asked; a non-zero exit refuses the request with its output. */
+  check?: string[]
+  /** Stores the secret, read from stdin. */
+  put: string[]
+  /** Prints the stored secret, to verify `put`. */
+  get?: string[]
+}
+
+export const RESERVED = ['title', 'why', 'how', 'file', 'file_key', 'timeout_seconds']
+
+/** Throws on a configuration that cannot work; called once at startup. */
+export function validate(stores: StoreConfig[]): void {
+  const ids = new Set<string>()
+  const names = new Set(RESERVED)
+  for (const s of stores) {
+    if (ids.has(s.id)) throw new Error(`request_secret: duplicate store id ${s.id}`)
+    ids.add(s.id)
+    if (!s.put?.length) throw new Error(`request_secret: store ${s.id} has no put command`)
+    for (const f of s.fields ?? []) {
+      if (names.has(f.name)) throw new Error(`request_secret: field ${f.name} is taken`)
+      names.add(f.name)
+    }
+  }
+}
+
 export function fingerprint(value: string): string {
   return `sha256:${createHash('sha256').update(value).digest('hex').slice(0, 12)}`
 }
 
-/** stderr without pass-cli's harmless mlock warnings, short, and never containing the value. */
+export function fill(template: string, spec: Pick<Spec, 'title' | 'fields'>): string {
+  return template.replace(/\{(\w+)\}/g, (_, key: string) =>
+    key === 'title' ? spec.title : (spec.fields[key] ?? ''),
+  )
+}
+
+/** A command's error output, short, and never containing the value. */
 function reason(run: Run, value?: string): string {
-  const text = run.stderr
-    .split('\n')
-    .filter((l) => l.trim() && !l.includes('sqlcipher_mlock'))
-    .join(' ')
-    .slice(0, 300)
+  const text = (run.stderr.trim() || run.stdout.trim()).replace(/\s+/g, ' ').slice(0, 300)
   const clean = value ? text.split(value).join('<secret>') : text
   return clean || `exit ${run.code}`
 }
 
 const same = (read: string, value: string): boolean => read.replace(/\r?\n$/, '') === value
 
-/** Stores and checks the secret in each destination, Pass first. Never throws. */
+/** Stores and checks the secret in each destination, in configured order. Never throws. */
 export class Store {
   constructor(
     private readonly run: Runner,
-    /** Command prefix reaching the container (where pass-cli and pi-secrets live). */
-    private readonly remote: string[],
+    readonly stores: StoreConfig[],
+    /** Whether the built-in `file` / `file_key` destination is offered. */
+    readonly files: boolean,
   ) {}
+
+  /** The stores a call uses and their field values (defaults filled in). */
+  select(args: Record<string, unknown>): Pick<Spec, 'stores' | 'fields'> {
+    const fields: Record<string, string> = {}
+    const stores: string[] = []
+    for (const s of this.stores) {
+      const given = (s.fields ?? []).filter((f) => {
+        const v = args[f.name]
+        return typeof v === 'string' && v.trim() !== ''
+      })
+      if (!s.always && given.length === 0) continue
+      stores.push(s.id)
+      for (const f of s.fields ?? []) {
+        const v = args[f.name]
+        const value = typeof v === 'string' && v.trim() ? v.trim() : f.default
+        if (value !== undefined) fields[f.name] = value
+      }
+    }
+    return { stores, fields }
+  }
+
+  /** The destinations as the user sees them on the card. */
+  destinations(spec: Spec): string[] {
+    const list = this.chosen(spec).map((s) => fill(s.label, spec))
+    if (spec.file) list.push(spec.file_key ? `${spec.file} (${spec.file_key}=…)` : spec.file)
+    return list
+  }
+
+  private chosen(spec: Spec): StoreConfig[] {
+    return this.stores.filter((s) => spec.stores.includes(s.id))
+  }
 
   /** Problems that should stop the request before the user types anything. */
   async preflight(spec: Spec): Promise<string | undefined> {
+    if (spec.file && !this.files) return 'file destinations are turned off'
     if (spec.file && !isAbsolute(spec.file)) return `file must be an absolute path: ${spec.file}`
     if (spec.file_key && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(spec.file_key)) {
       return `file_key must be a variable name: ${spec.file_key}`
     }
     if (spec.file_key && !spec.file) return 'file_key needs file'
-    const list = await this.run([
-      ...this.remote,
-      'pass-cli',
-      'item',
-      'list',
-      '--vault-name',
-      spec.vault,
-      '--output',
-      'json',
-    ])
-    if (list.code !== 0) return `Proton Pass is not reachable: ${reason(list)}`
-    try {
-      const items = (JSON.parse(list.stdout) as { items: { title: string; state: string }[] }).items
-      if (items.some((i) => i.title === spec.title && i.state === 'Active')) {
-        return `Proton Pass already has an item titled “${spec.title}” in ${spec.vault}; use another title or the existing item`
-      }
-    } catch {
-      return 'Proton Pass returned an unreadable item list'
+    if (!spec.file && spec.stores.length === 0) return 'no destination: name at least one place'
+    for (const s of this.chosen(spec)) {
+      if (!s.check) continue
+      const run = await this.run(s.check.map((a) => fill(a, spec)))
+      if (run.code !== 0) return `${fill(s.label, spec)}: ${reason(run)}`
     }
     return undefined
   }
 
   async save(spec: Spec, value: string): Promise<Stored[]> {
-    const results = [await this.pass(spec, value)]
+    const results: Stored[] = []
+    for (const s of this.chosen(spec)) results.push(await this.command(s, spec, value))
     if (spec.file) results.push(this.file(spec.file, spec.file_key, value))
-    if (spec.pi_secret) results.push(await this.piSecret(spec.pi_secret, value))
     return results
   }
 
-  private async pass(spec: Spec, value: string): Promise<Stored> {
-    const where = `Proton Pass: ${spec.vault} / ${spec.title}`
-    const template = JSON.stringify({
-      title: spec.title,
-      username: spec.username ?? null,
-      email: null,
-      password: value,
-      totp_uri: null,
-      urls: spec.url ? [spec.url] : [],
-    })
-    const pass = [...this.remote, 'pass-cli', 'item']
-    const made = await this.run(
-      [...pass, 'create', 'login', '--vault-name', spec.vault, '--from-template', '-'],
-      template,
+  private async command(s: StoreConfig, spec: Spec, value: string): Promise<Stored> {
+    const where = fill(s.label, spec)
+    const put = await this.run(
+      s.put.map((a) => fill(a, spec)),
+      value,
     )
-    if (made.code !== 0) return { where, ok: false, error: reason(made, value) }
-    const read = await this.run([
-      ...pass,
-      'view',
-      '--vault-name',
-      spec.vault,
-      '--item-title',
-      spec.title,
-      '--field',
-      'password',
-    ])
+    if (put.code !== 0) return { where, ok: false, error: reason(put, value) }
+    if (!s.get) return { where, ok: true }
+    const read = await this.run(s.get.map((a) => fill(a, spec)))
     if (read.code !== 0 || !same(read.stdout, value)) {
-      return { where, ok: false, error: 'created, but reading it back did not match' }
+      return { where, ok: false, error: 'stored, but reading it back did not match' }
     }
     return { where, ok: true }
   }
@@ -155,16 +206,5 @@ export class Store {
           .join('<secret>'),
       }
     }
-  }
-
-  private async piSecret(name: string, value: string): Promise<Stored> {
-    const where = `pi-secrets: ${name}`
-    const put = await this.run([...this.remote, 'pi-secrets', 'put', name], value)
-    if (put.code !== 0) return { where, ok: false, error: reason(put, value) }
-    const read = await this.run([...this.remote, 'pi-secrets', 'get', name])
-    if (read.code !== 0 || !same(read.stdout, value)) {
-      return { where, ok: false, error: 'stored, but reading it back did not match' }
-    }
-    return { where, ok: true }
   }
 }
